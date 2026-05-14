@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Tree</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px;
+    color: #1a1a1a;
+    background: #fff;
+    padding: 48px;
+    line-height: 1.5;
+  }
+
+  .root-label {
+    font-weight: 600;
+    font-size: 15px;
+    display: block;
+    margin-bottom: 2px;
+  }
+
+  .children {
+    border-left: 1.5px solid #d0d0d0;
+    margin-left: 8px;
+  }
+  .children.hidden { display: none; }
+
+  .node {
+    position: relative;
+    padding-left: 30px;
+    padding-top: 3px;
+    padding-bottom: 1px;
+  }
+
+  /* horizontal arm */
+  .node::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 12px;
+    width: 22px;
+    height: 1.5px;
+    background: #d0d0d0;
+  }
+
+  /* last child clips vertical line → └── */
+  .node:last-child::after {
+    content: '';
+    position: absolute;
+    left: -1.5px;
+    top: 13px;
+    width: 1.5px;
+    bottom: 0;
+    background: #fff;
+  }
+
+  .label {
+    color: #1a1a1a;
+  }
+  .label.has-children {
+    cursor: pointer;
+    font-weight: 500;
+  }
+  .label.has-children:hover { color: #555; }
+  .label.collapsed {
+    text-decoration: underline;
+    text-decoration-color: #bbb;
+    text-underline-offset: 3px;
+  }
+
+  /* note: block under label, no extra indent — already inside .node padding */
+  .note {
+    display: block;
+    font-size: 12px;
+    color: #777;
+    margin-top: 0;
+    line-height: 1.4;
+  }
+
+  .tip-anchor {
+    position: relative;
+    display: inline;
+  }
+  .tip-anchor:hover > .label { color: #555; }
+
+  /* small indicator dot that tooltip exists — on the anchor, not the label */
+  .tip-indicator {
+    display: inline-block;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: #ccc;
+    margin-left: 5px;
+    vertical-align: middle;
+    position: relative;
+    top: -1px;
+    transition: background 0.15s;
+  }
+  .tip-anchor:hover .tip-indicator { background: #999; }
+
+  .tip-box {
+    display: none;
+    position: absolute;
+    left: 0;
+    top: calc(100% + 6px);
+    z-index: 100;
+    min-width: 140px;
+    max-width: 260px;
+    padding: 7px 11px;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.5;
+    white-space: normal;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.13);
+    pointer-events: none;
+  }
+  .tip-anchor:hover .tip-box { display: block; }
+</style>
+</head>
+<body>
+<script>
+// ── Edit your tree here ──────────────────────────────────────────────────
+const SRC = `
+- Project Alpha ^ // #e8f4fd Main project umbrella
+  - #4a90d9 Backend ^ // Handles all server logic
+    - #e67e22 Auth Service ^ // #fff8e1 JWT tokens, refresh flow
+      - | JWT-based, stateless
+    - #e74c3c Database // #fdecea Check RDS configs
+      - | PostgreSQL on RDS
+    - API Gateway
+  - #27ae60 Frontend
+    - React App ^ // #f0fff4 Vite-powered SPA
+      - | Vite + Tailwind
+    - Design System
+  - DevOps
+    - CI/CD ^ // Runs on every PR
+      - | GitHub Actions
+    - #8e44ad Monitoring
+      - | Grafana + Prometheus
+`;
+// ────────────────────────────────────────────────────────────────────────
+
+function parse(src) {
+  const root = { label: '', note: '', tip: '', tipColor: '', bulletColor: '', expanded: true, children: [], root: true };
+  const stack = [{ node: root, indent: -1 }];
+  for (const raw of src.split('\n')) {
+    if (!raw.trim()) continue;
+    const m = raw.match(/^(\s*)[-*]\s+(.*)/);
+    if (!m) continue;
+    const indent = m[1].length;
+    let txt = m[2].trim();
+    let note = '', expanded = false, tip = '', tipColor = '', bulletColor = '';
+
+    // bullet color: #hex at start
+    const bc = txt.match(/^(#[0-9a-fA-F]{3,6})\s+(.*)/);
+    if (bc) { bulletColor = bc[1]; txt = bc[2].trim(); }
+
+    // tooltip after //
+    const ti = txt.indexOf(' //');
+    if (ti !== -1) {
+      let tipRaw = txt.slice(ti + 3).trim();
+      txt = txt.slice(0, ti).trim();
+      const cm = tipRaw.match(/^(#[0-9a-fA-F]{3,6})\s*(.*)/);
+      if (cm) { tipColor = cm[1]; tip = cm[2].trim(); }
+      else { tip = tipRaw; }
+    }
+
+    // note
+    const ni = txt.indexOf(' | ');
+    if (ni !== -1) { note = txt.slice(ni + 3).trim(); txt = txt.slice(0, ni).trim(); }
+    else if (txt.startsWith('| ')) { note = txt.slice(2).trim(); txt = ''; }
+
+    // expand flag
+    if (txt.endsWith(' ^') || txt === '^') { expanded = true; txt = txt.replace(/ ?\^$/, '').trim(); }
+    if (note.endsWith(' ^')) { expanded = true; note = note.replace(/ ?\^$/, '').trim(); }
+
+    const node = { label: txt, note, tip, tipColor, bulletColor, expanded, children: [] };
+    while (stack.length > 1 && stack[stack.length - 1].indent >= indent) stack.pop();
+    stack[stack.length - 1].node.children.push(node);
+    stack.push({ node, indent });
+  }
+  return root;
+}
+
+let uid = 0;
+
+function buildNode(node) {
+  const id = 'n' + (++uid);
+  const hasKids = node.children.length > 0;
+
+  const div = document.createElement('div');
+  div.className = 'node';
+
+  // label
+  const lbl = document.createElement('span');
+  lbl.className = 'label' + (hasKids ? ' has-children' : '');
+  lbl.id = 'lbl-' + id;
+  lbl.textContent = node.label;
+  if (node.bulletColor) lbl.style.color = node.bulletColor;
+  if (hasKids) {
+    if (!node.expanded) lbl.classList.add('collapsed');
+    lbl.onclick = () => toggle(id);
+  }
+
+  if (node.tip) {
+    const anchor = document.createElement('span');
+    anchor.className = 'tip-anchor';
+    anchor.appendChild(lbl);
+
+    const dot = document.createElement('span');
+    dot.className = 'tip-indicator';
+    anchor.appendChild(dot);
+
+    const tipBox = document.createElement('span');
+    tipBox.className = 'tip-box';
+    tipBox.textContent = node.tip;
+    tipBox.style.background = node.tipColor || '#fff';
+    tipBox.style.color = '#1a1a1a';
+    tipBox.style.border = '1px solid ' + (node.tipColor ? shadeOf(node.tipColor) : '#e0e0e0');
+    anchor.appendChild(tipBox);
+
+    div.appendChild(anchor);
+  } else {
+    div.appendChild(lbl);
+  }
+
+  // note: sits directly after label, no extra padding
+  if (node.note) {
+    const nt = document.createElement('span');
+    nt.className = 'note';
+    nt.textContent = node.note;
+    div.appendChild(nt);
+  }
+
+  if (hasKids) {
+    const kids = document.createElement('div');
+    kids.className = 'children' + (node.expanded ? '' : ' hidden');
+    kids.id = 'kids-' + id;
+    node.children.forEach(c => kids.appendChild(buildNode(c)));
+    div.appendChild(kids);
+  }
+
+  return div;
+}
+
+function shadeOf(hex) {
+  let h = hex.replace('#','');
+  if (h.length === 3) h = h.split('').map(x=>x+x).join('');
+  const r = Math.max(0, parseInt(h.slice(0,2),16) - 30);
+  const g = Math.max(0, parseInt(h.slice(2,4),16) - 30);
+  const b = Math.max(0, parseInt(h.slice(4,6),16) - 30);
+  return `rgb(${r},${g},${b})`;
+}
+
+function toggle(id) {
+  const kids = document.getElementById('kids-' + id);
+  const lbl  = document.getElementById('lbl-' + id);
+  if (!kids) return;
+  const col = kids.classList.toggle('hidden');
+  lbl.classList.toggle('collapsed', col);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const tree = parse(SRC);
+  const tops = tree.children;
+  if (tops.length === 1) {
+    const top = tops[0];
+    const rl = document.createElement('span');
+    rl.className = 'root-label';
+    rl.textContent = top.label;
+    document.body.appendChild(rl);
+    if (top.children.length) {
+      const kids = document.createElement('div');
+      kids.className = 'children' + (top.expanded ? '' : ' hidden');
+      kids.id = 'kids-root';
+      top.children.forEach(c => kids.appendChild(buildNode(c)));
+      document.body.appendChild(kids);
+    }
+  } else {
+    tops.forEach(c => document.body.appendChild(buildNode(c)));
+  }
+});
+</script>
+</body>
+</html>
